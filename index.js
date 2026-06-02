@@ -3,10 +3,10 @@ const cors = require('cors');
 const { spawn } = require('child_process');
 const ytSearch = require('yt-search'); 
 
-const app = express(); // Explicitly fixed to launch express cleanly
+const app = express(); 
 
-// Dynamically handle cloud port assignment, defaulting to 7860 for Hugging Face/Render compliance
-const PORT = process.env.PORT || 7860;
+// Dynamic environment routing matching your Dockerfile (7860) or local fallback (3000)
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 
@@ -45,7 +45,7 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
-// ROUTE 2: Dynamic Streaming Pipe (Optimized for safe seeking and universal audio frames)
+// ROUTE 2: Dynamic Streaming Pipe
 app.get('/api/stream', async (req, res) => {
   const videoId = req.query.id;
   const startSeconds = parseInt(req.query.start) || 0;
@@ -60,9 +60,9 @@ app.get('/api/stream', async (req, res) => {
 
   const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
   
-  // Set headers for standard chunked stream delivery
+  // CRITICAL FIX: Explicitly signal 'bytes' support to make Android media engines happy
   res.setHeader('Content-Type', 'audio/mpeg');
-  res.setHeader('Accept-Ranges', 'none'); 
+  res.setHeader('Accept-Ranges', 'bytes'); 
 
   // 1. Spawn yt-dlp to stream native high quality audio stream
   const ytdlp = spawn('yt-dlp', [
@@ -75,19 +75,18 @@ app.get('/api/stream', async (req, res) => {
 
   // 2. Spawn ffmpeg to dynamically consume the pipe, seek safely, and format to streamable mp3
   const ffmpeg = spawn('ffmpeg', [
-    '-i', 'pipe:0',                  // Read input directly from yt-dlp first
-    '-ss', startSeconds.toString(), // Output seeking (safe for non-seekable streams/pipes)
-    '-acodec', 'libmp3lame',        // Convert stream to universal, robust MP3 formatting
-    '-ab', '128k',                  // Stream audio resolution quality setup
-    '-f', 'mp3',                    // Force raw mp3 frame delivery container
-    '-'                              // Output out directly to system standard stdout
+    '-i', 'pipe:0',                  
+    '-ss', startSeconds.toString(), 
+    '-acodec', 'libmp3lame',        
+    '-ab', '128k',                  
+    '-f', 'mp3',                    
+    '-'                              
   ]);
 
   // Establish the pipeline link: yt-dlp -> ffmpeg -> Express response
   ytdlp.stdout.pipe(ffmpeg.stdin);
   ffmpeg.stdout.pipe(res);
 
-  // Catch engine failures safely
   ytdlp.on('error', (err) => {
     console.error('❌ yt-dlp runtime engine failure:', err.message);
   });
@@ -96,7 +95,7 @@ app.get('/api/stream', async (req, res) => {
     console.error('❌ ffmpeg pipeline remuxer failure:', err.message);
   });
 
-  // CRITICAL CLEANUP: Terminate both background tasks instantly when the user skips or scrubs
+  // CRITICAL CLEANUP: Terminate active pipelines on request close
   req.on('close', () => {
     console.log(`🔌 Request dropped by user. Terminating active streaming pipelines.`);
     
@@ -112,7 +111,7 @@ app.get('/api/stream', async (req, res) => {
   });
 });
 
-// Explicitly bind to "0.0.0.0" so the internal container can communicate with external internet traffic
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Altum Core Audio Processing Server running cleanly on port ${PORT}`);
+// Bind cleanly to standard or production environment variables
+app.listen(PORT, () => {
+  console.log(`🚀 Altum Core Audio Processing Server running seamlessly on port: ${PORT}`);
 });
