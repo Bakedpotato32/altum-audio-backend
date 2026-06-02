@@ -50,18 +50,26 @@ app.get('/api/stream', async (req, res) => {
   const videoId = req.query.id;
   const startSeconds = parseInt(req.query.start) || 0;
 
+  console.log(`\n🎵 Stream pipeline initiated for Video ID: ${videoId} starting at ${startSeconds}s`);
+
   if (!videoId) {
-    return res.status(400).json({ error: 'Missing video id parameter (id)' });
+    return res.status(400).json({ error: 'Missing video ID parameter (id)' });
   }
 
   const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  console.log(`\n🎵 Stream requested: ${videoId} starting at ${startSeconds}s`);
+  let headersSent = false;
 
-  // 1. Spawn yt-dlp to stream native high quality audio stream
+  // Set progressive chunk headers for HTML5 live streaming
+  res.setHeader('Content-Type', 'audio/mpeg');
+  res.setHeader('Transfer-Encoding', 'chunked');
+
+  // 1. Spawn yt-dlp with absolute premium bypass configurations
   const ytdlp = spawn('yt-dlp', [
+    '-4',                                                  // ⚡ FORCE IPv4: Bypasses dirty datacenter IPv6 blocks completely
     '-f', '140/bestaudio[ext=m4a]/bestaudio',
     '--no-playlist',
     '--js-runtimes', 'node',
+    '--extractor-args', 'youtube:player-client=ios,mweb', // ⚡ CLIENT SPOOFING: Evades standard automated bot detection checkpoints
     '-o', '-',
     youtubeUrl
   ]);
@@ -76,56 +84,13 @@ app.get('/api/stream', async (req, res) => {
     '-'                              
   ]);
 
-  // Establish the pipeline link: yt-dlp -> ffmpeg
+  // Establish the pipeline link: yt-dlp -> ffmpeg -> Express response
   ytdlp.stdout.pipe(ffmpeg.stdin);
+  ffmpeg.stdout.pipe(res);
 
-  // CRITICAL STREAM PROTECTION LAYER: Intercept stream errors to prevent EPIPE application crashes
-  ytdlp.stdout.on('error', (err) => {
-    if (err.code !== 'EPIPE' && err.code !== 'ECONNRESET') {
-      console.error('[yt-dlp stdout stream exception]:', err.message);
-    }
-  });
-
-  ffmpeg.stdin.on('error', (err) => {
-    if (err.code !== 'EPIPE' && err.code !== 'ECONNRESET') {
-      console.error('[ffmpeg stdin stream exception]:', err.message);
-    }
-  });
-
-  ffmpeg.stdout.on('error', (err) => {
-    if (err.code !== 'EPIPE' && err.code !== 'ECONNRESET') {
-      console.error('[ffmpeg stdout stream exception]:', err.message);
-    }
-  });
-
-  let headersSent = false;
-
-  // Intercept data chunks coming out of ffmpeg
-  ffmpeg.stdout.on('data', (chunk) => {
-    if (!headersSent) {
-      res.writeHead(200, {
-        'Content-Type': 'audio/mpeg',
-        'Accept-Ranges': 'bytes',
-        'Access-Control-Allow-Origin': '*'
-      });
-      headersSent = true;
-      console.log(`🚀 Audio processing successful. Piping live binary stream payload.`);
-    }
-    res.write(chunk);
-  });
-
-  ffmpeg.stdout.on('end', () => {
-    if (headersSent) {
-      res.end();
-    }
-  });
-
-  // Verbose stderr routing (filters out progress text noise to keep logs readable)
+  // Catch internal extraction logs and errors onto the live dashboard console
   ytdlp.stderr.on('data', (data) => {
-    const logStr = data.toString().trim();
-    if (!logStr.includes('% of') && !logStr.includes('MiB at')) {
-      console.log(`[yt-dlp operational log]: ${logStr}`);
-    }
+    console.warn(`[yt-dlp engine trace]: ${data.toString().trim()}`);
   });
 
   ytdlp.on('error', (err) => {
@@ -148,9 +113,11 @@ app.get('/api/stream', async (req, res) => {
   ffmpeg.on('close', (code) => {
     if (!headersSent && code !== 0 && code !== null) {
       console.error(`❌ Pipeline crash: ffmpeg closed with code ${code} before audio generation.`);
-      res.status(500).json({ 
-        error: 'Streaming server failed to process format.' 
-      });
+      if (!res.writableEnded) {
+        res.status(500).json({ 
+          error: 'Streaming server failed to process format.' 
+        });
+      }
       headersSent = true;
     }
   });
@@ -174,7 +141,5 @@ app.get('/api/stream', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`==================================================`);
-  console.log(`🚀 Altum Core Audio Engine running on port ${PORT}`);
-  console.log(`==================================================`);
+  console.log(`🚀 Altum Core Audio Core Engine listening on port ${PORT}`);
 });
