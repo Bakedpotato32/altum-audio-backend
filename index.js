@@ -5,8 +5,8 @@ const ytSearch = require('yt-search');
 
 const app = express(); 
 
-// Dynamic environment routing matching your Dockerfile (7860) or local fallback (3000)
-const PORT = process.env.PORT || 3000;
+// Fallback to 5000 locally to prevent port collisions with Next.js (port 3000)
+const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 
@@ -45,24 +45,17 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
-// ROUTE 2: Dynamic Streaming Pipe
+// ROUTE 2: Dynamic Core Audio Pipeline
 app.get('/api/stream', async (req, res) => {
   const videoId = req.query.id;
   const startSeconds = parseInt(req.query.start) || 0;
-  
-  console.log(`\n=======================`);
-  console.log(`📡 Stream request: ID ${videoId} at position ${startSeconds}s`);
-  
+
   if (!videoId) {
-    console.log(`❌ Request failed: Missing video ID`);
-    return res.status(400).json({ error: 'Missing YouTube video ID parameter' });
+    return res.status(400).json({ error: 'Missing video id parameter (id)' });
   }
 
   const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  
-  // CRITICAL FIX: Explicitly signal 'bytes' support to make Android media engines happy
-  res.setHeader('Content-Type', 'audio/mpeg');
-  res.setHeader('Accept-Ranges', 'bytes'); 
+  console.log(`\n🎵 Stream requested: ${videoId} starting at ${startSeconds}s`);
 
   // 1. Spawn yt-dlp to stream native high quality audio stream
   const ytdlp = spawn('yt-dlp', [
@@ -83,35 +76,105 @@ app.get('/api/stream', async (req, res) => {
     '-'                              
   ]);
 
-  // Establish the pipeline link: yt-dlp -> ffmpeg -> Express response
+  // Establish the pipeline link: yt-dlp -> ffmpeg
   ytdlp.stdout.pipe(ffmpeg.stdin);
-  ffmpeg.stdout.pipe(res);
+
+  // CRITICAL STREAM PROTECTION LAYER: Intercept stream errors to prevent EPIPE application crashes
+  ytdlp.stdout.on('error', (err) => {
+    if (err.code !== 'EPIPE' && err.code !== 'ECONNRESET') {
+      console.error('[yt-dlp stdout stream exception]:', err.message);
+    }
+  });
+
+  ffmpeg.stdin.on('error', (err) => {
+    if (err.code !== 'EPIPE' && err.code !== 'ECONNRESET') {
+      console.error('[ffmpeg stdin stream exception]:', err.message);
+    }
+  });
+
+  ffmpeg.stdout.on('error', (err) => {
+    if (err.code !== 'EPIPE' && err.code !== 'ECONNRESET') {
+      console.error('[ffmpeg stdout stream exception]:', err.message);
+    }
+  });
+
+  let headersSent = false;
+
+  // Intercept data chunks coming out of ffmpeg
+  ffmpeg.stdout.on('data', (chunk) => {
+    if (!headersSent) {
+      res.writeHead(200, {
+        'Content-Type': 'audio/mpeg',
+        'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*'
+      });
+      headersSent = true;
+      console.log(`🚀 Audio processing successful. Piping live binary stream payload.`);
+    }
+    res.write(chunk);
+  });
+
+  ffmpeg.stdout.on('end', () => {
+    if (headersSent) {
+      res.end();
+    }
+  });
+
+  // Verbose stderr routing (filters out progress text noise to keep logs readable)
+  ytdlp.stderr.on('data', (data) => {
+    const logStr = data.toString().trim();
+    if (!logStr.includes('% of') && !logStr.includes('MiB at')) {
+      console.log(`[yt-dlp operational log]: ${logStr}`);
+    }
+  });
 
   ytdlp.on('error', (err) => {
     console.error('❌ yt-dlp runtime engine failure:', err.message);
+    if (!headersSent) {
+      res.status(500).json({ error: 'Audio extractor failed to initialize.' });
+      headersSent = true;
+    }
   });
 
   ffmpeg.on('error', (err) => {
     console.error('❌ ffmpeg pipeline remuxer failure:', err.message);
+    if (!headersSent) {
+      res.status(500).json({ error: 'Audio encoder pipeline breakdown.' });
+      headersSent = true;
+    }
   });
 
-  // CRITICAL CLEANUP: Terminate active pipelines on request close
+  // Handle stream terminations cleanly
+  ffmpeg.on('close', (code) => {
+    if (!headersSent && code !== 0 && code !== null) {
+      console.error(`❌ Pipeline crash: ffmpeg closed with code ${code} before audio generation.`);
+      res.status(500).json({ 
+        error: 'Streaming server failed to process format.' 
+      });
+      headersSent = true;
+    }
+  });
+
+  // CRITICAL CLEANUP: Safely decouple active pipelines when client disconnects or scrubs
   req.on('close', () => {
     console.log(`🔌 Request dropped by user. Terminating active streaming pipelines.`);
-    
     try {
       ytdlp.stdout.unpipe();
+    } catch (e) {}
+    try {
+      ffmpeg.stdout.unpipe();
+    } catch (e) {}
+    try {
       ytdlp.kill('SIGKILL');
     } catch (e) {}
-
     try {
-      ffmpeg.stdout.unpipe(res);
       ffmpeg.kill('SIGKILL');
     } catch (e) {}
   });
 });
 
-// Bind cleanly to standard or production environment variables
 app.listen(PORT, () => {
-  console.log(`🚀 Altum Core Audio Processing Server running seamlessly on port: ${PORT}`);
+  console.log(`==================================================`);
+  console.log(`🚀 Altum Core Audio Engine running on port ${PORT}`);
+  console.log(`==================================================`);
 });
