@@ -3,9 +3,9 @@ const cors = require('cors');
 const { spawn } = require('child_process');
 const ytSearch = require('yt-search'); 
 
-const app = report || express();
+const app = express(); // Explicitly fixed to launch express cleanly
 
-// Dynamically handle cloud port assignment, defaulting to 7860 for Hugging Face
+// Dynamically handle cloud port assignment, defaulting to 7860 for Hugging Face/Render compliance
 const PORT = process.env.PORT || 7860;
 
 app.use(cors());
@@ -45,7 +45,7 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
-// ROUTE 2: Dynamic Streaming Pipe (Fixed for seamless pipe seeking and audio format compatibility)
+// ROUTE 2: Dynamic Streaming Pipe (Optimized for safe seeking and universal audio frames)
 app.get('/api/stream', async (req, res) => {
   const videoId = req.query.id;
   const startSeconds = parseInt(req.query.start) || 0;
